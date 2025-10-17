@@ -7,6 +7,7 @@ sys.path.append(project_root)
 
 # Project file imports
 from dronekit import connect, Vehicle, VehicleMode
+from pymavlink import mavutil  # ADDED: Needed for GUIDED mode fix
 
 #commented out search algo for phase 1 2526
 #from DroneCode.SearchAlgoScript import load_waypoints_from_csv, equirectangular_approximation 
@@ -25,8 +26,10 @@ def connectMyCopter(SIMULATE_DRONE: bool) -> Vehicle:
         import dronekit_sitl
         # Keep default start position for GPS/RTL boundaries
         sitl = dronekit_sitl.start_default(lat=32.92019, lon=-96.94831)
+        time.sleep(1.0)  # ADDED: Small delay helps stabilize SITL
         connection_string = sitl.connection_string()
         vehicle = connect(connection_string, wait_ready=True)
+        vehicle.wait_ready('mode', 'gps_0', timeout=30)  # ADDED: Ensure SITL is ready
         print("[SIM] Connected to SITL UAV with GPS enabled.")
     else:
         print("[HW] Connecting to Pixhawk on /dev/ttyACM0 ...")
@@ -46,9 +49,26 @@ def arm_drone(vehicle):
 
     print("Switching to GUIDED mode...")
     vehicle.mode = VehicleMode("GUIDED")
+    
+    # ADDED: Robust mode switching with MAVLink fallback for SITL compatibility
+    timeout = 20
+    start_time = time.time()
     while vehicle.mode.name != "GUIDED":
-        print("Waiting for GUIDED mode...")
-        time.sleep(1)
+        if time.time() - start_time > timeout:
+            # Try MAVLink fallback
+            print("[WARN] Forcing GUIDED via MAVLink...")
+            vehicle._master.mav.set_mode_send(
+                vehicle._master.target_system,
+                mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+                4  # GUIDED mode
+            )
+            time.sleep(2)
+            if vehicle.mode.name != "GUIDED":
+                raise RuntimeError(f"Timeout waiting for GUIDED mode (stuck in {vehicle.mode.name})")
+            break
+        print(f"Waiting for GUIDED mode... (current: {vehicle.mode.name})")
+        time.sleep(0.5)
+    # END ADDED SECTION
 
     # Ensure GPS has a valid fix (2D/3D)
     while vehicle.gps_0.fix_type < 2:
@@ -79,7 +99,7 @@ def takeoff_drone(vehicle, targetAltitude=2.0):
             break
         time.sleep(1)
 
-    # Optional: Verify boundaries if you’re enforcing a safety box
+    # Optional: Verify boundaries if you're enforcing a safety box
     print("Takeoff complete. GPS and barometer active.")
  
 #COMMENTED OUT SEARCH PATTERN FOR PHASE 1
