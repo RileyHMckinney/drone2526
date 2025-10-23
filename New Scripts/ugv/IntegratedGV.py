@@ -9,10 +9,12 @@ Unified UGV control module (Raspberry Pi side).
 
 Later, motion commands can be replaced with real Pixhawk or motor control logic.
 """
-
+from akida_obstacle_module import AkidaObstacleDetector
 import serial
 import json
 import time
+import cv2
+import numpy as np
 
 # === SERIAL CONFIGURATION ===
 PORT = "/dev/ttyUSB0"     # ESP32 → Raspberry Pi connection
@@ -24,12 +26,22 @@ FORWARD_THRESHOLD = 0.2   # meters
 TURN_THRESHOLD = 0.1      # meters
 SPEED_SCALE = 0.5         # proportional gain for visualization
 
+# initialize obstacle detector
+detector = AkidaObstacleDetector()
+cap = cv2.VideoCapture(0)
 # === FUNCTIONS ===
+def detect_obstacle(): #TEST
+    """returns true or false if obstacle is detected in frame"""
+    ret, frame = cap.read()
+    if not ret:
+        return False
+    #print(f"[Akida] Obstacle probability > .5?: {obstacle_bool} ") #TEST
+    return detector.detect(frame)
+
 def interpret_motion(x, y):
-    """Simulate motion intent based on relative vector (x, y)."""
+    """Simulate motion intent based on relative vector (x, y).""" 
     move_forward = "Forward" if x > FORWARD_THRESHOLD else (
                    "Reverse" if x < -FORWARD_THRESHOLD else "Stop")
-
     if y > TURN_THRESHOLD:
         turn_dir = "Turn Right"
     elif y < -TURN_THRESHOLD:
@@ -48,6 +60,9 @@ def main():
         print("[INFO] Listening for incoming JSON data...\n")
 
         while True:
+            #check if obstacle detected
+            if detect_obstacle():
+                print("Obstacle detected!") # add logic to move around the obstacle
             try:
                 raw = ser.readline().decode("utf-8", errors="ignore").strip()
                 if not raw:
