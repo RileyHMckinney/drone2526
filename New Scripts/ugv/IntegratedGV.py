@@ -10,6 +10,7 @@ Unified UGV control module (Raspberry Pi side).
 Later, motion commands can be replaced with real Pixhawk or motor control logic.
 """
 from akida_obstacle_module import AkidaObstacleDetector
+from obstacle_avoidance import ObstacleAvoidance
 import serial
 import json
 import time
@@ -26,18 +27,12 @@ FORWARD_THRESHOLD = 0.2   # meters
 TURN_THRESHOLD = 0.1      # meters
 SPEED_SCALE = 0.5         # proportional gain for visualization
 
-# initialize obstacle detector
+# === INITIALIZATION ===
 detector = AkidaObstacleDetector()
 cap = cv2.VideoCapture(0)
-# === FUNCTIONS ===
-def detect_obstacle(): #TEST
-    """returns true or false if obstacle is detected in frame"""
-    ret, frame = cap.read()
-    if not ret:
-        return False
-    #print(f"[Akida] Obstacle probability > .5?: {obstacle_bool} ") #TEST
-    return detector.detect(frame)
+avoidance = ObstacleAvoidance(debug=True)
 
+# === FUNCTIONS ===
 def interpret_motion(x, y):
     """Simulate motion intent based on relative vector (x, y).""" 
     move_forward = "Forward" if x > FORWARD_THRESHOLD else (
@@ -60,9 +55,28 @@ def main():
         print("[INFO] Listening for incoming JSON data...\n")
 
         while True:
-            #check if obstacle detected
-            if detect_obstacle():
-                print("Obstacle detected!") # add logic to move around the obstacle
+            # --- 1. Capture frame for obstacle avoidance ---
+            ret, frame = cap.read()
+            if ret:
+                decision = avoidance.process_frame(frame)
+                frame = avoidance.visualize(frame, decision)
+
+                if decision != "CLEAR":
+                    print(f"[AVOID] Detected {decision} obstacle — overriding movement.")
+                    if decision == "LEFT":
+                        print("[ACTION] Turning RIGHT to bypass obstacle.")
+                    elif decision == "RIGHT":
+                        print("[ACTION] Turning LEFT to bypass obstacle.")
+                    elif decision in ["CENTER", "STOP"]:
+                        print("[ACTION] Stopping until path clears.")
+                    time.sleep(0.5)
+                    continue  # Skip normal vector motion until path clear
+
+                cv2.imshow("Obstacle Avoidance", frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+            # --- 2. Process incoming data from UAV ---
             try:
                 raw = ser.readline().decode("utf-8", errors="ignore").strip()
                 if not raw:
@@ -87,8 +101,13 @@ def main():
 
             time.sleep(READ_DELAY)
 
+    cap.release()
+    cv2.destroyAllWindows()
+
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         print("\n[INFO] UGV controller terminated by user.")
+        cap.release()
+        cv2.destroyAllWindows()
