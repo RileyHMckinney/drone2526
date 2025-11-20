@@ -1,0 +1,13 @@
+# Core vision requirements for ArUco marker detection
+opencv-contrib-python==4.8.1.78
+numpy>=1.24.0
+
+# UAV communication (you likely already have these)
+dronekit>=2.9.2
+pymavlink>=2.4.40
+
+# Optional: ZED camera support (only if using ZED camera)
+# pyzed
+
+# Existing project dependencies
+# Add any other dependencies from your main requirements.txt

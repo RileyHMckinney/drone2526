@@ -1,0 +1,10 @@
+{
+  "challenge": 2,
+  "timestamp": "2025-11-14 11:28:15",
+  "success": false,
+  "duration_seconds": 55.891698122024536,
+  "target_found": false,
+  "target_coordinates": null,
+  "arrival_radius": 1.5,
+  "ugv_speed": 0.5
+}
