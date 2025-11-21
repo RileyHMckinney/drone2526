@@ -1,6 +1,5 @@
 """
 challenge2AV.py
-Author: Riley McKinney
 
 Challenge 2 - UAV Master Script
 --------------------------------

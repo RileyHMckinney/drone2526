@@ -1,6 +1,5 @@
 """
 challenge3GV.py
-Author: Riley McKinney
 
 Challenge 3 Ground Vehicle Controller
 -------------------------------------

@@ -1,6 +1,5 @@
 """
 challenge3AV.py
-Author: Riley McKinney
 
 Challenge 3 - UAV Master Script (BrainChip/Akida Challenge)
 -----------------------------------------------------------

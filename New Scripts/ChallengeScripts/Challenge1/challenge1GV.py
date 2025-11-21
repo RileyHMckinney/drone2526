@@ -1,6 +1,5 @@
 """
 challenge1GV.py
-Author: Riley McKinney
 
 UGV Listener Script for Challenge 1
 -----------------------------------

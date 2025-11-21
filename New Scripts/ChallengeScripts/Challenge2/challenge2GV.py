@@ -1,6 +1,5 @@
 """
 challenge2GV.py
-Author: Riley McKinney
 
 Challenge 2 Ground Vehicle Controller
 -------------------------------------
