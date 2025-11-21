@@ -4,6 +4,11 @@ aruco_detector.py
 Detects multiple ArUco markers from a downward-facing monocular camera,
 estimates their positions (X, Y, Z) relative to the UAV, and computes the
 straight-line vector and distance between a UGV marker and a goal marker.
+
+Updated to also provide:
+    - pixel center (cx, cy) of each marker
+    - marker area in pixels^2
+    - helper method detect_single_marker(frame, marker_id)
 """
 
 import cv2
@@ -46,6 +51,7 @@ class ArucoDetector:
         self.detector_params = cv2.aruco.DetectorParameters()
         self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.detector_params)
 
+        # Rolling average buffer per marker_id
         self.position_buffers = {}  # marker_id → deque of tvecs
 
     # --- Utility ---
@@ -65,7 +71,17 @@ class ArucoDetector:
 
     # --- Core ---
     def detect_markers(self, frame):
-        """Detect all visible markers and return structured pose data."""
+        """
+        Detect all visible markers and return structured pose data as a list of dicts.
+
+        Each dict contains:
+            - marker_id: int
+            - position_m: [x, y, z] in meters (smoothed tvec)
+            - rotation_deg: [roll, pitch, yaw] in degrees
+            - pixel: [cx, cy] center in image coordinates
+            - area: float, marker area in pixel^2
+            - timestamp: float (time.time())
+        """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = self.detector.detectMarkers(gray)
         detections = []
@@ -75,6 +91,7 @@ class ArucoDetector:
             return detections
 
         for i, marker_id in enumerate(ids.flatten()):
+            # Pose estimation
             rvec, tvec, _ = cv2.aruco.estimatePoseSingleMarkers(
                 [corners[i]], self.marker_size, self.camera_matrix, self.dist_coeffs
             )
@@ -86,9 +103,17 @@ class ArucoDetector:
             buf.append(tvec)
             smoothed_tvec = np.mean(buf, axis=0)
 
+            # Rotation to Euler
             R, _ = cv2.Rodrigues(rvec)
             euler = self.rotation_matrix_to_euler(R)
 
+            # Pixel center and area
+            pts = corners[i][0]  # shape (4, 2)
+            cx = float(np.mean(pts[:, 0]))
+            cy = float(np.mean(pts[:, 1]))
+            area = float(cv2.contourArea(pts.astype(np.float32)))
+
+            # Draw markers for debug
             cv2.aruco.drawDetectedMarkers(frame, [corners[i]])
             cv2.drawFrameAxes(frame, self.camera_matrix, self.dist_coeffs, rvec, tvec, 0.05)
 
@@ -96,15 +121,29 @@ class ArucoDetector:
                 "marker_id": int(marker_id),
                 "position_m": smoothed_tvec.tolist(),
                 "rotation_deg": euler,
+                "pixel": [cx, cy],
+                "area": area,
                 "timestamp": time.time()
             })
 
         return detections
 
+    def detect_single_marker(self, frame, target_marker_id):
+        """
+        Convenience method: detect markers and return the dict for a specific marker ID.
+        Returns None if not found.
+        """
+        detections = self.detect_markers(frame)
+        for d in detections:
+            if d["marker_id"] == target_marker_id:
+                return d
+        return None
+
     # --- Vector Computation ---
     @staticmethod
     def compute_vector_between_markers(goal_marker, ugv_marker):
         """Compute the 3D vector and distance from UGV → Goal."""
+
         t_goal = np.array(goal_marker["position_m"])
         t_ugv = np.array(ugv_marker["position_m"])
 
@@ -142,6 +181,17 @@ def main():
         if goal_marker and ugv_marker:
             vector_data = detector.compute_vector_between_markers(goal_marker, ugv_marker)
             print(json.dumps(vector_data, indent=2))
+
+        # Debug: show centers and area
+        for d in detections:
+            cx, cy = d["pixel"]
+            area = d["area"]
+            cv2.circle(frame, (int(cx), int(cy)), 4, (0, 255, 0), -1)
+            cv2.putText(frame,
+                        f"ID {d['marker_id']} A={int(area)}",
+                        (int(cx) - 40, int(cy) - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.4, (0, 255, 0), 1, cv2.LINE_AA)
 
         cv2.imshow("Aruco Detector", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
