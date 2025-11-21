@@ -1,20 +1,21 @@
 """
-challenge2GV.py
+challenge3GV.py
 Author: Riley McKinney
 
-Challenge 2 Ground Vehicle Controller
+Challenge 3 Ground Vehicle Controller
 -------------------------------------
-Vector following ONLY.
-NO Akida obstacle avoidance.
-NO camera-based obstacle override.
+Vector following + Akida/BrainChip obstacle avoidance.
 
-Supports two communication modes (select at runtime):
-1) ESP32 UART (/dev/ttyUSB0)
-2) Direct TCP (Jetson -> Pi)
+Supports TWO modes:
+1 → ESP32 UART (/dev/ttyUSB0)
+2 → Direct TCP (Jetson -> Pi)
 
-Reads UGV->Goal vectors from UAV,
-computes forward/turn motor commands,
-stops when near the goal for UAV landing.
+Behavior:
+- Reads UGV->Goal vectors from UAV
+- Uses AkidaObstacleDetector to detect obstacles
+- obstacle_avoidance.py decides LEFT / RIGHT / CENTER / STOP
+- Overrides movement when obstacles are seen
+- Stops when near the goal to allow UAV landing
 """
 
 import time
@@ -24,28 +25,32 @@ import serial
 import logging
 import threading
 import os
-
+import cv2
 import numpy as np
+
+from akida_obstacle_module import AkidaObstacleDetector
+from obstacle_avoidance import ObstacleAvoidance
+
 
 # ==========================================================
 # LOGGING
 # ==========================================================
 
-LOG_FILE = os.path.join(os.path.dirname(__file__), "challenge2GV.log")
+LOG_FILE = os.path.join(os.path.dirname(__file__), "challenge3GV.log")
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [C2-GV] %(levelname)s: %(message)s",
+    format="%(asctime)s [C3-GV] %(levelname)s: %(message)s",
     handlers=[
         logging.FileHandler(LOG_FILE),
         logging.StreamHandler()
     ]
 )
 
-log = logging.getLogger("Challenge2GV")
+log = logging.getLogger("Challenge3GV")
 
 
 # ==========================================================
-# CONFIGURATION
+# CONFIG
 # ==========================================================
 
 UART_PORT = "/dev/ttyUSB0"
@@ -57,7 +62,7 @@ TCP_PORT = 5006
 MAX_NO_VECTOR_TIME = 10.0
 LOOP_DT = 0.05
 
-# Shared vector
+# Shared vector object
 latest_vector = {
     "vector": [0.0, 0.0, 0.0],
     "distance_m": None,
@@ -65,9 +70,11 @@ latest_vector = {
 }
 vector_lock = threading.Lock()
 
+avoidance = ObstacleAvoidance(debug=True)
+
 
 # ==========================================================
-# MOTOR CONTROL PLACEHOLDERS
+# MOTOR CONTROL
 # ==========================================================
 
 def motors_forward(speed=0.3):
@@ -87,7 +94,7 @@ def motors_stop():
 
 
 # ==========================================================
-# COMMUNICATION LISTENERS
+# LISTENERS
 # ==========================================================
 
 def uart_listener():
@@ -96,7 +103,7 @@ def uart_listener():
         ser = serial.Serial(UART_PORT, UART_BAUD, timeout=1)
         log.info(f"[UART] Listening on {UART_PORT}")
     except Exception as e:
-        log.error(f"[UART] Failed to open port: {e}")
+        log.error(f"[UART] Could not open port: {e}")
         return
 
     while True:
@@ -121,6 +128,7 @@ def uart_listener():
 
 def tcp_listener():
     global latest_vector
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((TCP_HOST, TCP_PORT))
@@ -148,6 +156,7 @@ def tcp_listener():
                         continue
 
                     log.info(f"[TCP RAW] {line}")
+
                     try:
                         data = json.loads(line)
                         if "vector_ugv_to_goal" in data:
@@ -168,11 +177,6 @@ def tcp_listener():
 # ==========================================================
 
 def interpret_vector(vec):
-    """
-    vec = [x, y, z]
-    x = forward magnitude
-    y = lateral steering magnitude
-    """
     x, y, _ = vec
 
     THRESH_FORWARD = 0.1
@@ -198,7 +202,7 @@ def interpret_vector(vec):
 # ==========================================================
 
 def main():
-    print("Select communication mode (Challenge 2 GV):")
+    print("Select communication mode (Challenge 3 GV):")
     print("1 → ESP32 UART")
     print("2 → Direct TCP")
     mode = input("Enter 1 or 2: ").strip()
@@ -212,25 +216,49 @@ def main():
 
     comm_thread.start()
 
+    log.info("Starting Pi camera for Akida obstacle avoidance...")
+    cap = cv2.VideoCapture(0)
+
     try:
         while True:
+            # === 1. Akida obstacle avoidance ===
+            ret, frame = cap.read()
+            if ret:
+                decision = avoidance.process_frame(frame)
+                frame = avoidance.visualize(frame, decision)
+
+                if decision != "CLEAR":
+                    log.info(f"[AVOID] Obstacle detected: {decision}")
+                    motors_stop()
+                    cv2.imshow("Obstacle Avoidance (C3)", frame)
+                    cv2.waitKey(1)
+                    time.sleep(0.1)
+                    continue
+
+                cv2.imshow("Obstacle Avoidance (C3)", frame)
+                cv2.waitKey(1)
+
+            # === 2. Retrieve vector ===
             with vector_lock:
                 vec = latest_vector["vector"]
                 dist = latest_vector["distance_m"]
                 ts = latest_vector["timestamp"]
 
+            # === 3. Timeout safety ===
             if time.time() - ts > MAX_NO_VECTOR_TIME:
                 log.warning("No recent vector; stopping.")
                 motors_stop()
                 time.sleep(LOOP_DT)
                 continue
 
+            # === 4. Near-goal behavior ===
             if dist is not None and dist < 1.0:
-                log.info(f"[NEAR GOAL] d={dist:.2f} m. Stopping for UAV landing.")
+                log.info(f"[NEAR GOAL] d={dist:.2f} m → stopping for landing")
                 motors_stop()
                 time.sleep(LOOP_DT)
                 continue
 
+            # === 5. Normal vector following ===
             interpret_vector(vec)
             time.sleep(LOOP_DT)
 
@@ -238,6 +266,9 @@ def main():
         log.info("Stopping GV (user interrupt).")
     finally:
         motors_stop()
+        cap.release()
+        cv2.destroyAllWindows()
+        log.info("Challenge 3 GV controller shut down.")
 
 
 if __name__ == "__main__":
